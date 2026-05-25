@@ -1,20 +1,49 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-.env
+# Virtual environments
 .venv/
 venv/
+env/
+ENV/
+.env
 
+# Jupyter
 .ipynb_checkpoints/
 
-data/raw/
-data/interim/
-data/processed/
+# IDE
+.vscode/
+.idea/
+.agents/
+.codex/
 
-outputs/models/
-outputs/figures/
-outputs/tables/
+# OS
+.DS_Store
+Thumbs.db
 
-*.csv
-*.jsonl
-*.parquet
+# Data
+data/raw/*
+!data/raw/.gitkeep
+
+data/processed/*
+!data/processed/.gitkeep
+
+data/interim/*
+!data/interim/.gitkeep
+
+data/**/*.csv
+data/**/*.json
+data/**/*.jsonl
+data/**/*.parquet
+
+# Generated outputs
+outputs/
+
+# Model artifacts
+*.pkl
+*.joblib
+*.h5
+*.pt
