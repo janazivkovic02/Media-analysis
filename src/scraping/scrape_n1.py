@@ -1,12 +1,17 @@
 from datetime import date, datetime
 import json # For saving articles in JSON format
 import re # For regular expressions in date parsing and text cleaning
+from pathlib import Path
+import sys
 import time
 import hashlib # For generating unique filenames based on article URLs
 from urllib.parse import urljoin, urlparse # For handling URLs
 
 import requests # For making HTTP requests and handling responses
 from bs4 import BeautifulSoup # For parsing HTML content
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from scraping import DATE_FROM, DATE_TO, OUT_DIR, HEADERS, MONTHS
 
