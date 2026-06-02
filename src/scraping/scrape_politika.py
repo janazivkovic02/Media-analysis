@@ -15,17 +15,33 @@ if __package__ in (None, ""):
 
 from scraping import DATE_FROM, DATE_TO, HEADERS, MONTHS, OUT_DIR
 
-# Scraper for Alo - https://www.alo.rs
-BASE_URL = "https://www.alo.rs"
+# Scraper for Politika - https://www.politika.rs
+BASE_URL = "https://www.politika.rs"
 START_URLS = [
-    "https://www.alo.rs/search/tagStories.html?tagId=3996",
-    "https://www.alo.rs/search/tagStories.html?tagId=21666",
-    "https://www.alo.rs/search/tagStories.html?tagId=13851",
+    "https://www.politika.rs/scc/tags/articles/353/blokada",
+    "https://www.politika.rs/scc/tags/articles/8109/blokaderi",
+    "https://www.politika.rs/scc/tags/articles/661/studenti",
 ]
 
-# Output directory specific for Alo articles
-ALO_OUT_DIR = OUT_DIR / "alo"
-ALO_OUT_DIR.mkdir(parents=True, exist_ok=True)
+# Output directory specific for Politika articles
+POLITIKA_OUT_DIR = OUT_DIR / "politika"
+POLITIKA_OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+POLITIKA_MONTHS = {
+    **MONTHS,
+    "јан": 1,
+    "феб": 2,
+    "мар": 3,
+    "апр": 4,
+    "мај": 5,
+    "јун": 6,
+    "јул": 7,
+    "авг": 8,
+    "сеп": 9,
+    "окт": 10,
+    "нов": 11,
+    "дец": 12,
+}
 
 
 def get_soup(url: str) -> BeautifulSoup:
@@ -42,12 +58,7 @@ def clean_text(text: str) -> str:
 def normalize_url(url: str) -> str:
     parsed = urlparse(urljoin(BASE_URL, url))
     path = parsed.path.rstrip("/")
-    normalized = f"{parsed.scheme}://{parsed.netloc}{path}"
-
-    if path == "/search/tagStories.html" and parsed.query:
-        normalized = f"{normalized}?{parsed.query}"
-
-    return normalized
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
 
 
 def parse_datetime_value(value: str | None):
@@ -60,36 +71,37 @@ def parse_datetime_value(value: str | None):
         return None
 
 
-def parse_alo_date(text: str):
+def parse_politika_date(text: str):
     """
     Examples:
-    01.10.2025. 09:33
-    10. jan. 2025.
-    danas 12:33
-    juče 18:10
+    Среда, 22.04.2026. у 09:54
+    29.05.2026
+    10. јан. 2025.
+    данас 12:33
+    јуче 18:10
     """
     text = clean_text(text).lower()
 
-    match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\.", text)
+    match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\.?", text)
     if match:
         day = int(match.group(1))
         month = int(match.group(2))
         year = int(match.group(3))
         return date(year, month, day)
 
-    match = re.search(r"(\d{1,2})\.\s*([a-zčćšđž]+)\.?\s*(\d{4})", text)
+    match = re.search(r"(\d{1,2})\.\s*([a-zčćšđžа-шђжљњћ]+)\.?\s*(\d{4})", text)
     if match:
         day = int(match.group(1))
         month_key = match.group(2)[:3]
         year = int(match.group(3))
-        month = MONTHS.get(month_key)
+        month = POLITIKA_MONTHS.get(month_key)
         if month:
             return date(year, month, day)
 
     today = date.today()
-    if re.search(r"\bdanas\b", text):
+    if re.search(r"\b(?:данас|danas)\b", text):
         return today
-    if re.search(r"\bjuče\b|\bjuce\b", text):
+    if re.search(r"\b(?:јуче|juče|juce)\b", text):
         return today - timedelta(days=1)
 
     return None
@@ -102,33 +114,13 @@ def is_article_url(url: str) -> bool:
         return False
 
     parts = [part for part in parsed.path.strip("/").split("/") if part]
-    if len(parts) < 4:
-        return False
-
-    ignored_first_parts = {
-        "search",
-        "tema",
-        "tag",
-        "author",
-        "najnovije",
-        "naslovna",
-        "weather.html",
-        "upload",
-        "marketing",
-        "impresum",
-        "pravila-koriscenja",
-        "politika-privatnosti",
-    }
-    if parts[0] in ignored_first_parts:
-        return False
-
-    return parts[-2].isdigit() and parts[-1].endswith(".html")
+    return len(parts) >= 4 and parts[0] == "scc" and parts[1] == "clanak" and parts[2].isdigit()
 
 
 def extract_article_links(soup: BeautifulSoup) -> list[str]:
     links = []
     seen = set()
-    root = soup.select_one(".searchTag-content") or soup.find("main") or soup
+    root = soup.select_one("article .article-content") or soup.find("article") or soup
 
     for a in root.find_all("a", href=True):
         url = normalize_url(a["href"])
@@ -144,15 +136,21 @@ def extract_article_links(soup: BeautifulSoup) -> list[str]:
 
 def is_tag_page_url(url: str) -> bool:
     parsed = urlparse(url)
-    return (
-        parsed.netloc == urlparse(BASE_URL).netloc
-        and parsed.path == "/search/tagStories.html"
-        and "tagId=" in parsed.query
-    )
+
+    if parsed.netloc != urlparse(BASE_URL).netloc:
+        return False
+
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    return len(parts) >= 5 and parts[0:3] == ["scc", "tags", "articles"] and parts[3].isdigit()
+
+
+def get_page_number(url: str) -> int:
+    match = re.search(r"/page:(\d+)/?", urlparse(url).path)
+    return int(match.group(1)) if match else 1
 
 
 def find_next_page(soup: BeautifulSoup, current_url: str):
-    root = soup.select_one(".searchTag-content") or soup.find("main") or soup
+    root = soup.select_one(".pagination") or soup
 
     for a in root.find_all("a", href=True):
         text = clean_text(a.get_text(" ", strip=True)).casefold()
@@ -161,34 +159,23 @@ def find_next_page(soup: BeautifulSoup, current_url: str):
 
         if not is_tag_page_url(url):
             continue
-        if "next" in rel or text in {"sledeća", "sledece", "next", ">"}:
+        if "next" in rel or text in {"следећа", "sledeća", "sledece", "next", ">"}:
             return url
 
-    current_position = get_position(current_url)
-    candidates = []
-
+    page_numbers = []
     for a in root.find_all("a", href=True):
         text = clean_text(a.get_text(" ", strip=True))
         url = normalize_url(a["href"])
 
         if text.isdigit() and is_tag_page_url(url):
-            candidates.append((int(text), get_position(url), url))
+            page_numbers.append((int(text), url))
 
-    for _page_num, position, url in sorted(candidates):
-        if position is not None and current_position is not None and position > current_position:
-            return url
-
-    for page_num, _position, url in sorted(candidates):
-        if page_num == 2 and current_position is None:
+    current_num = get_page_number(current_url)
+    for page_num, url in sorted(page_numbers):
+        if page_num == current_num + 1:
             return url
 
     return None
-
-
-def get_position(url: str):
-    query = urlparse(url).query
-    match = re.search(r"(?:^|&)position=(\d+)(?:&|$)", query)
-    return int(match.group(1)) if match else None
 
 
 def iter_json_ld_items(soup: BeautifulSoup):
@@ -211,6 +198,12 @@ def iter_json_ld_items(soup: BeautifulSoup):
             graph = item.get("@graph")
             if isinstance(graph, list):
                 items.extend(graph)
+
+            main_entity = item.get("mainEntity")
+            if isinstance(main_entity, list):
+                items.extend(main_entity)
+            elif isinstance(main_entity, dict):
+                items.append(main_entity)
 
             yield item
 
@@ -259,19 +252,29 @@ def extract_author_and_date(soup: BeautifulSoup):
                 if published_date:
                     break
 
-    if not author:
-        author_label = soup.find(string=re.compile(r"\bautor\b", re.I))
-        if author_label and author_label.parent:
-            parent_text = clean_text(author_label.parent.get_text(" ", strip=True))
-            author = clean_text(re.sub(r"autor:?", "", parent_text, flags=re.I))
+    article = soup.find("article") or soup
 
     if not published_date:
         title = soup.find("h1")
-        search_root = title.find_all_next(string=True, limit=60) if title else soup.find_all(string=True)
+        search_root = title.find_all_next(string=True, limit=80) if title else article.find_all(string=True)
         for text_node in search_root:
-            parsed_date = parse_alo_date(str(text_node))
+            parsed_date = parse_politika_date(str(text_node))
             if parsed_date:
                 published_date = parsed_date
+                break
+
+    if not author and published_date:
+        date_pattern = re.compile(r"\d{1,2}\.\d{1,2}\.\d{4}")
+        for text_node in article.find_all(string=True):
+            text = clean_text(str(text_node))
+            if date_pattern.search(text):
+                parent_text = clean_text(text_node.parent.get_text(" ", strip=True))
+                parts = date_pattern.split(parent_text, maxsplit=1)
+                if len(parts) == 2:
+                    author_candidate = clean_text(
+                        re.sub(r"^[\s.]*у\s+\d{1,2}:\d{2}", "", parts[1], flags=re.I)
+                    )
+                    author = author_candidate or author
                 break
 
     return author, published_date
@@ -285,30 +288,35 @@ def extract_article(url: str, tag_page: str) -> dict | None:
 
     author, published_date = extract_author_and_date(soup)
 
-    body = soup.select_one(".contentBody.body") or soup.select_one(".story-body") or soup.find("main") or soup
+    article = soup.select_one("article .article-content") or soup.find("article") or soup
     paragraphs = []
 
-    for p in body.find_all("p"):
+    for p in article.find_all("p"):
         txt = clean_text(p.get_text(" ", strip=True))
 
         if len(txt) < 30:
             continue
 
         skip_phrases = [
-            "Podeli",
+            "Developed by",
+            "Коментар успешно додат",
+            "Комeнтар успeшно додат",
+            "Ваш коментар ће бити видљив",
+            "Ваш комeнтар ћe бити видљив",
+            "Повезане Теме",
+            "Повезане теме",
+            "Прочитајте још",
             "Pročitajte još",
-            "Procitajte još",
+            "Пратите нас",
             "Pratite nas",
-            "Oglas",
-            "Bonus video",
+            "Најновије",
             "Najnovije",
+            "Најчитаније",
             "Najčitanije",
-            "Najcitanije",
+            "Коментари",
             "Komentari",
-            "Tagovi",
-            "Alo.rs",
-            "PROČITAJTE KLIKOM OVDE",
-            "Preuzmite našu aplikaciju",
+            "Политика онлајн",
+            "Politika Online",
         ]
 
         if any(phrase.lower() in txt.lower() for phrase in skip_phrases):
@@ -322,8 +330,8 @@ def extract_article(url: str, tag_page: str) -> dict | None:
         return None
 
     return {
-        "source": "Alo",
-        "portal": "alo.rs",
+        "source": "Politika",
+        "portal": "politika.rs",
         "tag_page": tag_page,
         "url": url,
         "title": title,
@@ -336,7 +344,7 @@ def extract_article(url: str, tag_page: str) -> dict | None:
 
 def make_filename(url: str) -> str:
     h = hashlib.md5(url.encode("utf-8")).hexdigest()[:10]
-    slug = url.rstrip("/").split("/")[-1].removesuffix(".html")
+    slug = url.rstrip("/").split("/")[-1]
     slug = re.sub(r"[^a-zA-Z0-9_-]+", "_", slug)
     return f"{slug}_{h}.json"
 
@@ -344,7 +352,7 @@ def make_filename(url: str) -> str:
 def load_existing_urls() -> set[str]:
     urls = set()
 
-    for path in ALO_OUT_DIR.glob("*.json"):
+    for path in POLITIKA_OUT_DIR.glob("*.json"):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 article = json.load(f)
@@ -360,7 +368,7 @@ def load_existing_urls() -> set[str]:
 
 def save_article(article: dict):
     filename = make_filename(article["url"])
-    path = ALO_OUT_DIR / filename
+    path = POLITIKA_OUT_DIR / filename
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(article, f, ensure_ascii=False, indent=2)
@@ -424,12 +432,12 @@ def main():
     seen_urls = load_existing_urls()
     total_saved = 0
 
-    print(f"Loaded {len(seen_urls)} already scraped Alo URLs")
+    print(f"Loaded {len(seen_urls)} already scraped Politika URLs")
 
     for start_url in START_URLS:
         total_saved += scrape_tag(start_url, seen_urls)
 
-    print(f"\nDone. Saved {total_saved} new articles to {ALO_OUT_DIR}")
+    print(f"\nDone. Saved {total_saved} new articles to {POLITIKA_OUT_DIR}")
 
 
 if __name__ == "__main__":

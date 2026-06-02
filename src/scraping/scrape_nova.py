@@ -73,10 +73,13 @@ def parse_nova_date(text: str):
     return None
 
 
-def parse_datetime_value(value: str):
+def parse_datetime_value(value: str | None):
+    if not value:
+        return None
+
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
-    except (TypeError, ValueError):
+    except ValueError:
         return None
 
 
@@ -87,7 +90,7 @@ def is_article_url(url: str) -> bool:
         return False
 
     parts = [part for part in parsed.path.strip("/").split("/") if part]
-    if len(parts) < 2:
+    if len(parts) < 3:
         return False
 
     ignored_first_parts = {
@@ -118,6 +121,9 @@ def is_article_url(url: str) -> bool:
         "video",
         "kolumne",
     }
+
+    if parts[-1] == "komentari":
+        return False
 
     return parts[0] in allowed_first_parts
 

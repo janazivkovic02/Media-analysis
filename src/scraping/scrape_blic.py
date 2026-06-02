@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 import sys
 import time
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -13,18 +13,20 @@ from bs4 import BeautifulSoup
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from scraping import DATE_FROM, DATE_TO, HEADERS, OUT_DIR
+from scraping import DATE_FROM, DATE_TO, HEADERS, MONTHS, OUT_DIR
 
-# Scraper for B92 - https://www.b92.net
-BASE_URL = "https://www.b92.net"
+# Scraper for Blic - https://www.blic.rs
+BASE_URL = "https://www.blic.rs"
 START_URLS = [
-    "https://www.b92.net/tema/18150/protesti-studenata",
-    "https://www.b92.net/tema/49889/studentske-blokade",
+    "https://www.blic.rs/studentske-blokade",
+    "https://www.blic.rs/blokade-studenata",
+    "https://www.blic.rs/studenti-u-blokadi",
+    "https://www.blic.rs/studentski-protesti",
 ]
 
-# Output directory specific for B92 articles
-B92_OUT_DIR = OUT_DIR / "b92"
-B92_OUT_DIR.mkdir(parents=True, exist_ok=True)
+# Output directory specific for Blic articles
+BLIC_OUT_DIR = OUT_DIR / "blic"
+BLIC_OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def get_soup(url: str) -> BeautifulSoup:
@@ -41,7 +43,13 @@ def clean_text(text: str) -> str:
 def normalize_url(url: str) -> str:
     parsed = urlparse(urljoin(BASE_URL, url))
     path = parsed.path.rstrip("/")
-    return f"{parsed.scheme}://{parsed.netloc}{path}/"
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+def normalize_page_url(url: str) -> str:
+    parsed = urlparse(urljoin(BASE_URL, url))
+    query = urlencode(parse_qs(parsed.query), doseq=True)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", query, ""))
 
 
 def parse_datetime_value(value: str | None):
@@ -54,15 +62,32 @@ def parse_datetime_value(value: str | None):
         return None
 
 
-def parse_b92_date(text: str):
+def parse_blic_date(text: str):
+    """
+    Examples:
+    14.08.2025
+    14. avgust 2025. 22:03
+    10. jan. 2025.
+    danas 12:33
+    juče 18:10
+    """
     text = clean_text(text).lower()
 
-    match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})\.", text)
+    match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", text)
     if match:
         day = int(match.group(1))
         month = int(match.group(2))
         year = int(match.group(3))
         return date(year, month, day)
+
+    match = re.search(r"(\d{1,2})\.\s*([a-zčćšđž]+)\.?\s*(\d{4})", text)
+    if match:
+        day = int(match.group(1))
+        month_key = match.group(2)[:3]
+        year = int(match.group(3))
+        month = MONTHS.get(month_key)
+        if month:
+            return date(year, month, day)
 
     today = date.today()
     if re.search(r"\bdanas\b", text):
@@ -80,88 +105,84 @@ def is_article_url(url: str) -> bool:
         return False
 
     parts = [part for part in parsed.path.strip("/").split("/") if part]
-    if len(parts) != 5:
+    if len(parts) < 4:
         return False
 
     ignored_first_parts = {
-        "tema",
-        "komentari",
-        "najnovije",
-        "marketing",
-        "impresum",
-        "pravila-koriscenja",
-        "politika-privatnosti",
+        "bbc",
+        "najnovije-vesti",
+        "o-nama",
+        "pravila-i-uslovi-koriscenja-sajta",
+        "svg-assets",
     }
     if parts[0] in ignored_first_parts:
         return False
 
-    return parts[2].isdigit() and parts[-1] == "vest"
+    return bool(re.fullmatch(r"[a-z0-9]{7}", parts[-1]))
 
 
 def extract_article_links(soup: BeautifulSoup) -> list[str]:
     links = []
     seen = set()
-    root = soup.find("main") or soup
+    roots = soup.select(".section__left--inner-left") or [soup.find("main") or soup]
 
-    for a in root.find_all("a", href=True):
-        url = normalize_url(a["href"])
+    for root in roots:
+        for article in root.select("article.news-box__item"):
+            a = article.find("a", href=True)
+            if not a:
+                continue
 
-        if not is_article_url(url) or url in seen:
-            continue
+            url = normalize_url(a["href"])
+            if not is_article_url(url) or url in seen:
+                continue
 
-        seen.add(url)
-        links.append(url)
+            seen.add(url)
+            links.append(url)
 
     return links
 
 
 def get_page_number(url: str) -> int:
-    parts = [part for part in urlparse(url).path.strip("/").split("/") if part]
-    return int(parts[-1]) if parts and parts[-1].isdigit() else 1
-
-
-def is_topic_page_url(url: str) -> bool:
     parsed = urlparse(url)
-
-    if parsed.netloc != urlparse(BASE_URL).netloc:
-        return False
-
-    parts = [part for part in parsed.path.strip("/").split("/") if part]
-    return len(parts) in {3, 4} and parts[0] == "tema" and parts[1].isdigit()
+    value = parse_qs(parsed.query).get("strana", ["1"])[0]
+    return int(value) if value.isdigit() else 1
 
 
 def find_next_page(soup: BeautifulSoup, current_url: str):
+    form = soup.find("form", id="pagination-next-form")
+    next_input = form.find("input", attrs={"name": "strana"}) if form else None
+
+    if next_input and next_input.get("value", "").isdigit():
+        parsed = urlparse(current_url)
+        query = parse_qs(parsed.query)
+        query["strana"] = [next_input["value"]]
+        return normalize_page_url(urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", urlencode(query, doseq=True), "")))
+
+    current_num = get_page_number(current_url)
     for a in soup.find_all("a", href=True):
         text = clean_text(a.get_text(" ", strip=True)).casefold()
-        rel = {value.casefold() for value in a.get("rel", [])}
-
-        if "next" in rel or text in {"sledeća", "sledece", "next", ">"}:
-            url = normalize_url(a["href"])
-            if is_topic_page_url(url):
-                return url
+        if text in {"sledeća", "sledece", "next", ">"}:
+            href = a["href"]
+            if href == "#":
+                continue
+            return normalize_page_url(href)
 
     page_numbers = []
     for a in soup.find_all("a", href=True):
         text = clean_text(a.get_text(" ", strip=True))
-        url = normalize_url(a["href"])
+        if text.isdigit():
+            url = normalize_page_url(a["href"])
+            if urlparse(url).netloc == urlparse(BASE_URL).netloc:
+                page_numbers.append((int(text), url))
 
-        if text.isdigit() and is_topic_page_url(url):
-            page_numbers.append((int(text), url))
-
-    if page_numbers:
-        current_num = get_page_number(current_url)
-
-        for page_num, url in sorted(page_numbers):
-            if page_num == current_num + 1:
-                return url
+    for page_num, url in sorted(page_numbers):
+        if page_num == current_num + 1:
+            return url
 
     return None
 
 
-def extract_json_ld_metadata(soup: BeautifulSoup) -> tuple[str | None, date | None]:
-    author = None
-    published_date = None
-
+def iter_json_ld_items(soup: BeautifulSoup):
     for script in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(script.string or "")
@@ -169,7 +190,12 @@ def extract_json_ld_metadata(soup: BeautifulSoup) -> tuple[str | None, date | No
             continue
 
         items = data if isinstance(data, list) else [data]
-        for item in items:
+        index = 0
+
+        while index < len(items):
+            item = items[index]
+            index += 1
+
             if not isinstance(item, dict):
                 continue
 
@@ -177,21 +203,35 @@ def extract_json_ld_metadata(soup: BeautifulSoup) -> tuple[str | None, date | No
             if isinstance(graph, list):
                 items.extend(graph)
 
-            if not published_date:
-                published_date = parse_datetime_value(item.get("datePublished"))
+            yield item
 
-            if not author:
-                author_data = item.get("author")
-                if isinstance(author_data, dict):
-                    author = author_data.get("name")
-                elif isinstance(author_data, list) and author_data:
-                    first_author = author_data[0]
-                    if isinstance(first_author, dict):
-                        author = first_author.get("name")
-                    elif isinstance(first_author, str):
-                        author = first_author
-                elif isinstance(author_data, str):
-                    author = author_data
+
+def extract_json_ld_metadata(soup: BeautifulSoup) -> tuple[str | None, date | None]:
+    author = None
+    published_date = None
+
+    for item in iter_json_ld_items(soup):
+        item_type = item.get("@type")
+        types = item_type if isinstance(item_type, list) else [item_type]
+
+        if "NewsArticle" not in types and "Article" not in types:
+            continue
+
+        if not published_date:
+            published_date = parse_datetime_value(item.get("datePublished"))
+
+        if not author:
+            author_data = item.get("author")
+            if isinstance(author_data, dict):
+                author = author_data.get("name")
+            elif isinstance(author_data, list) and author_data:
+                first_author = author_data[0]
+                if isinstance(first_author, dict):
+                    author = first_author.get("name")
+                elif isinstance(first_author, str):
+                    author = first_author
+            elif isinstance(author_data, str):
+                author = author_data
 
     return clean_text(author) if author else None, published_date
 
@@ -205,31 +245,23 @@ def extract_author_and_date(soup: BeautifulSoup):
             author = clean_text(meta_author["content"])
 
     if not published_date:
-        for attr in (
-            {"property": "article:published_time"},
-            {"name": "date"},
-            {"name": "pubdate"},
-        ):
-            meta_date = soup.find("meta", attrs=attr)
-            if meta_date and meta_date.get("content"):
-                published_date = parse_datetime_value(meta_date["content"])
-                if published_date:
-                    break
+        meta_date = soup.find("meta", attrs={"property": "article:published_time"})
+        if meta_date and meta_date.get("content"):
+            published_date = parse_datetime_value(meta_date["content"])
 
     time_tag = soup.find("time")
     if time_tag and not published_date:
         published_date = parse_datetime_value(time_tag.get("datetime"))
         if not published_date:
-            published_date = parse_b92_date(time_tag.get_text(" ", strip=True))
+            published_date = parse_blic_date(time_tag.get_text(" ", strip=True))
+
+    if not author:
+        author_tag = soup.select_one(".article__author-name")
+        if author_tag:
+            author = clean_text(author_tag.get_text(" ", strip=True))
 
     if not published_date:
-        title = soup.find("h1")
-        search_root = title.find_all_next(string=True, limit=50) if title else soup.find_all(string=True)
-        for text_node in search_root:
-            parsed_date = parse_b92_date(str(text_node))
-            if parsed_date:
-                published_date = parsed_date
-                break
+        published_date = parse_blic_date(soup.get_text(" ", strip=True))
 
     return author, published_date
 
@@ -242,9 +274,24 @@ def extract_article(url: str, tag_page: str) -> dict | None:
 
     author, published_date = extract_author_and_date(soup)
 
-    article = soup.find("article") or soup.find("main") or soup
-    paragraphs = []
+    article = soup.select_one(".article__text") or soup.find("article") or soup.find("main") or soup
 
+    for selector in (
+        "aside",
+        "script",
+        "style",
+        ".audio-player",
+        ".article__author",
+        ".article__images",
+        ".article__tags",
+        ".banner",
+        ".news-aside",
+        ".share-popup",
+    ):
+        for element in article.select(selector):
+            element.decompose()
+
+    paragraphs = []
     for p in article.find_all("p"):
         txt = clean_text(p.get_text(" ", strip=True))
 
@@ -252,18 +299,22 @@ def extract_article(url: str, tag_page: str) -> dict | None:
             continue
 
         skip_phrases = [
-            "Podeli",
+            "Dodaj Blic",
+            "Slušaj vest",
             "Pročitajte još",
             "Procitajte još",
+            "Podeli",
             "Pratite nas",
             "Oglas",
             "Najnovije",
             "Najčitanije",
             "Najcitanije",
+            "Preporučujemo",
             "Komentari",
-            "Tagovi",
-            "B92.net",
-            "Preuzmite našu aplikaciju",
+            "Pridružite se",
+            "Blic Viber",
+            "Blic WhatsApp",
+            "Google News",
         ]
 
         if any(phrase.lower() in txt.lower() for phrase in skip_phrases):
@@ -277,8 +328,8 @@ def extract_article(url: str, tag_page: str) -> dict | None:
         return None
 
     return {
-        "source": "B92",
-        "portal": "b92.net",
+        "source": "Blic",
+        "portal": "blic.rs",
         "tag_page": tag_page,
         "url": url,
         "title": title,
@@ -299,7 +350,7 @@ def make_filename(url: str) -> str:
 def load_existing_urls() -> set[str]:
     urls = set()
 
-    for path in B92_OUT_DIR.glob("*.json"):
+    for path in BLIC_OUT_DIR.glob("*.json"):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 article = json.load(f)
@@ -315,7 +366,7 @@ def load_existing_urls() -> set[str]:
 
 def save_article(article: dict):
     filename = make_filename(article["url"])
-    path = B92_OUT_DIR / filename
+    path = BLIC_OUT_DIR / filename
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(article, f, ensure_ascii=False, indent=2)
@@ -379,12 +430,12 @@ def main():
     seen_urls = load_existing_urls()
     total_saved = 0
 
-    print(f"Loaded {len(seen_urls)} already scraped B92 URLs")
+    print(f"Loaded {len(seen_urls)} already scraped Blic URLs")
 
     for start_url in START_URLS:
         total_saved += scrape_tag(start_url, seen_urls)
 
-    print(f"\nDone. Saved {total_saved} new articles to {B92_OUT_DIR}")
+    print(f"\nDone. Saved {total_saved} new articles to {BLIC_OUT_DIR}")
 
 
 if __name__ == "__main__":
