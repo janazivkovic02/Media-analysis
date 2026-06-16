@@ -249,19 +249,14 @@ This format is useful for Serbian text because article bodies may contain commas
 
 ## 4. Data Exploration and Cleaning
 
-The notebook `notebooks/01_data_exploration.ipynb` is used for exploratory data analysis and first preprocessing steps.
+The notebook `notebooks/01_data_exploration.ipynb` is used for exploratory data analysis
 
 The notebook currently performs:
 
 - loading `data/processed/articles.csv`;
-- creating a `full_text` column from `title + text`;
-- converting Cyrillic text to Latin script;
-- lowercasing text;
-- normalizing whitespace;
-- removing leakage patterns;
-- creating text fingerprints;
-- removing near-duplicate articles by fingerprint;
-- creating stratified train/test splits.
+- looking at dataset
+
+The cleaning and train test split is done in `scrips/make_clean_dataset.py` and `scrips/train_test_split.py`
 
 The preprocessing helpers are located in:
 
@@ -289,7 +284,7 @@ This is important because the classification task should learn from journalistic
 
 ### Train/Test Split
 
-The notebook creates:
+The script creates:
 
 ```text
 data/processed/train.csv
