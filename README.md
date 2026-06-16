@@ -115,12 +115,6 @@ Install the project dependencies:
 pip install -r requirements.txt
 ```
 
-For feature engineering and notebook work, additional packages may be needed:
-
-```bash
-pip install pandas numpy scipy scikit-learn sentence-transformers torch cyrtranslit
-```
-
 Because the project uses a `src/` layout, run scripts with `PYTHONPATH=src` if the package is not installed in editable mode:
 
 ```bash
@@ -254,9 +248,14 @@ The notebook `notebooks/01_data_exploration.ipynb` is used for exploratory data 
 The notebook currently performs:
 
 - loading `data/processed/articles.csv`;
-- looking at dataset
+- data exploration
 
 The cleaning and train test split is done in `scrips/make_clean_dataset.py` and `scrips/train_test_split.py`
+
+```bash
+PYTHONPATH=src python scripts/make_clean_dataset.py
+PYTHONPATH=src python scripts/train_test_split.py
+```
 
 The preprocessing helpers are located in:
 
