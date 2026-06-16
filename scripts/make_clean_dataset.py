@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from src.preprocessing.cleaning import clean_leakage_patterns, make_fingerprint
-from src.preprocessing.cyrilic_to_latin import convert_to_latin
+from preprocessing.cleaning import clean_leakage_patterns, make_fingerprint
+from preprocessing.cyrilic_to_latin import convert_to_latin
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

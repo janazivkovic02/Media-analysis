@@ -47,7 +47,6 @@ Media-analysis-main/
 │
 ├── README.md
 ├── requirements.txt
-├── pyproject.toml
 ├── .gitignore
 │
 ├── data/
@@ -119,12 +118,6 @@ Because the project uses a `src/` layout, run scripts with `PYTHONPATH=src` if t
 
 ```bash
 PYTHONPATH=src python scripts/scrape_articles.py
-```
-
-Alternatively, install the project locally:
-
-```bash
-pip install -e .
 ```
 
 ## Pipeline Overview
