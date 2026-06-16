@@ -379,54 +379,6 @@ Input: article full_text
 Target label: source
 ```
 
-In other words, the first modeling goal is to predict which portal published an article based on its text.
-
-This can be used as a baseline for later media analysis, but the results should be interpreted carefully. A high classification score may mean that portals have distinct writing styles, but it may also indicate that the dataset still contains source-specific signals or topic imbalance.
-
-## Important Notes
-
-### Raw Data Should Not Be Edited Manually
-
-Raw scraped files in `data/raw/` should be treated as immutable. If cleaning is needed, it should be done through scripts or notebooks and saved into `data/processed/`.
-
-### Avoid Data Leakage
-
-For portal classification, it is important to remove obvious source identifiers before modeling. Examples include:
-
-- portal names inside text;
-- URLs;
-- author signatures that appear only on one portal;
-- image credits;
-- source attribution phrases;
-- tags and categories;
-- repeated boilerplate text.
-
-Otherwise, the model may learn shortcuts instead of meaningful textual patterns.
-
-### Notebook vs Scripts
-
-The notebook is useful for exploration and checking data quality. Once the preprocessing choices are stable, the cleaning and train/test split steps should ideally be moved into scripts, for example:
-
-```text
-scripts/make_clean_data.py
-scripts/train_test_split.py
-```
-
-This would make the pipeline more reproducible.
-
-## Suggested Next Steps
-
-Recommended improvements for the next stage of the project:
-
-1. Move final cleaning logic from the notebook into a script.
-2. Add `data/processed/.gitkeep` so the processed folder exists in the repository.
-3. Add a script for train/test splitting.
-4. Add baseline models such as Logistic Regression and Linear SVM.
-5. Add evaluation metrics: accuracy, macro F1, confusion matrix, and per-class scores.
-6. Check whether portal-specific leakage remains in `full_text`.
-7. Add documentation for each scraper explaining which tag pages are used.
-8. Add simple tests for URL normalization, date parsing, and article extraction.
-
 ## Reproducible Run Order
 
 A typical full run should look like this:
@@ -438,8 +390,14 @@ PYTHONPATH=src python scripts/scrape_articles.py
 # 2. Build combined CSV
 python scripts/build_articles_dataset.py
 
-# 3. Open notebook and create cleaned train/test files
+# 3. Open notebook
 jupyter notebook notebooks/01_data_exploration.ipynb
+
+# 4. Clean data
+PYTHONPATH=src python scripts/make_clean_dataset.py
+
+# 5. Split into train and test
+PYTHONPATH=src python scripts/train_test_split.py
 
 # 4. Build TF-IDF and Embedić features
 PYTHONPATH=src python src/features/build_feature.py
